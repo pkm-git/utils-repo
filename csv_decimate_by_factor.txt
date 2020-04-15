@@ -1,0 +1,285 @@
+# ******************************************************************************
+#  Copyright (c) 2019 LORD Corporation. All rights reserved.
+#
+#  This software is distributed with GNU Public License version 3 (GPL v3).
+#  Any modification or re-distribution is governed by GPL v3. For full details,
+#  please refer to LICENSE.txt included with the distribution zip file.
+# ******************************************************************************
+
+# This routine decimates the input csv file to pick only every tenth data row, keeping the headers intact
+# So a 100 Hz input csv file would result in a new file that has 10 Hz data in it
+# Then it takes 3 such input csv files and concatenates them side-by-side
+# If GPS Week cross-over happens in any of the 3 files, it maintains the previous GPS Week and adds delta to the TOW
+# in order to facilitate 'Relative Time' plotting of the data
+
+import os
+import csv
+import numpy as np
+
+def print_row(data_row_cnt, data_row, fout_csv_file, gps_tow_calc = False, data_row_cnt_tow_change = 0, tow_first_changed = 0, prev_gps_week_in = 0, change_cnt = 0, prev_file_gps_week = 0, prev_file_last_tow = 0, gps_week_constant = False, is_GPS_NRTSIM_File = False):
+      
+   i = 0
+   prev_gps_week = 0
+   
+   if (is_GPS_NRTSIM_File):
+      gps_week_index = 0
+      gps_tow_index = 1
+   else:
+      gps_week_index = 1
+      gps_tow_index = 2
+   
+   for v in data_row:
+      i += 1
+      try:
+         if (v.strip() != '' and 'nan' not in v.strip().lower() and 'ind' not in v.strip().lower()):
+            if (i == len(data_row)):
+	       if ('.' in v or 'e' in v):
+   	          fout_csv_file.write('%14.8f'%(float(v)))
+               else:
+	       	  fout_csv_file.write('%1d'%(int(v)))        
+               # } if ('.' in v)...
+       	       
+	    elif (gps_tow_calc and i == 28): # GPS TOW
+	       interp_val = tow_first_changed + (data_row_cnt - data_row_cnt_tow_change)* 0.01
+	       fout_csv_file.write('%14.8f,'%(interp_val))
+	    elif ('.' in v or 'e' in v):
+	       if (i == gps_tow_index+1):
+	          if (gps_week_constant):
+		     fout_csv_file.write('%14.8f,'%(float(v) + 604800 * change_cnt))
+		  else:
+		     fout_csv_file.write('%14.8f,'%(float(v)))
+		  # } if (gps_week_constant)..   
+               elif (i == 41):  # Flip LORD EKF NRTSIM Pitch value to match reference unit used by Canadian Space Agency
+	       	  fout_csv_file.write('%14.8f,'%(float(v) * -1))
+	       else:   
+	          fout_csv_file.write('%14.8f,'%(float(v)))
+               # } if (i == gps_tow_index+1 and..
+	       
+	       # Print extra column value for computed ambient pr using Ht abv MSL (for Canadian Space Agency)
+               if (is_GPS_File and not is_GPS_NRTSIM_File and i == gps_ht_msl_index+1):
+                  ambient_pressure = np.interp(float(data_row[6]), altitude_array, ambient_pressure_array) * 1000
+       	          if (data_row_cnt < 5):
+       	             print(' **** data_row_cnt: ' + str(data_row_cnt) + ', Ht abv MSL = ' + data_row[6] + ', ambient_pressure = ' + str(ambient_pressure))
+                  # } if (data_row_cnt < 5)..
+       	     
+       	          fout_csv_file.write('%14.8f,'%(ambient_pressure))
+       	       # } if (is_GPS_File and gps_week_constant)..   
+
+   	    else:
+	       if (i == gps_week_index+1):
+	          # print(' ****** data_row_cnt: ' + str(data_row_cnt) + ', prev_gps_week = ' + str(prev_gps_week) + ', current gps_week: ' + v)
+	          # Check if GPS Week changed from previous row value:
+	          if (prev_gps_week_in != 0 and int(v) != 0 and int(v) != prev_gps_week_in):
+		     change_cnt = change_cnt + 1
+		     print(' ****** GPS WEEK CHANGED AT: data_row_cnt: ' + str(data_row_cnt) + ', prev_gps_week_in = ' + str(prev_gps_week_in) + ', new gps week = ' + v + ', change_cnt = ' + str(change_cnt))
+		  # } if (prev_gps_week != 0 and..
+
+		  if (gps_week_constant):
+		     fout_csv_file.write('%1d,'%(int(v)-change_cnt))
+		  else:
+		     fout_csv_file.write('%1d,'%(int(v)))
+		  # } if (gps_week_constant)..
+		  
+	          prev_gps_week = int(v)
+	       elif (i == gps_tow_index+1):
+	          if (gps_week_constant):
+		     fout_csv_file.write('%14.8f,'%(float(v) + 604800 * change_cnt))
+		  else:
+		     fout_csv_file.write('%14.8f,'%(float(v)))
+		  # } if (gps_week_constant)..   
+               else:
+	          fout_csv_file.write('%1d,'%(int(v)))
+               # } if (i == gps_week_index)..		  
+   	    # } if (i == len(..
+         elif ('nan' in v.strip().lower() or 'ind' in v.strip().lower()):
+	    if (i == len(data_row)):
+	       fout_csv_file.write(v)
+	    else:
+	       fout_csv_file.write(v + ',')
+            # } if (i == len(data_row))..	       
+         else:
+            fout_csv_file.write(',')
+         # } if (v.strip() != '')..
+
+      except TypeError:
+         print(' ***** print_row: TypeError: at data_row_cnt = ' + str(data_row_cnt) + ', len(data_row) = ' + str(len(data_row)) + ', column: ' + str(i) + ', value: ' + str(v))
+      
+      except ValueError:
+         print(' ***** print_row: ValueError: at data_row_cnt = ' + str(data_row_cnt) + ', column: ' + str(i) + ', value: ' + str(v))
+
+   # } for v in data_row..
+
+   fout_csv_file.write('\n')
+      
+   return prev_gps_week, change_cnt
+      
+def process_csv_file(csvreader, gps_tow_calc = False, findFirstGPSTOWChange = False, data_row_cnt_tow_change = 0, tow_first_changed = 0, file_cnt = 1, prev_file_gps_week = 0, prev_file_last_tow = 0, change_cnt = 0, gps_week_constant = False, decimate = False, is_GPS_NRTSIM_File = False):
+
+   determine_headers = False
+   headers_found = False
+   data_row_cnt = 0
+
+   n_data_columns = 0
+   
+   tow_prev = 0
+   tow_current = 0
+   prev_gps_week = 0
+   
+   if (is_GPS_NRTSIM_File):
+      gps_week_index = 0
+      gps_tow_index = 1
+   else:
+      gps_week_index = 1
+      gps_tow_index = 2
+   
+   header_dict = {}
+      
+   for data_row in csvreader:
+
+      # determined that last row in CSV indicated data start (headers are in this row)
+      if (determine_headers):
+         n_data_columns =  len(data_row)
+
+         # column headers have been found
+         headers_found = True
+
+         # headers no longer need to be determined
+         determine_headers = False
+         
+	 if (file_cnt == 1 and not findFirstGPSTOWChange):
+            i = 0
+            for c in data_row:
+               i += 1
+      	       if (i == len(data_row)):
+      	          fout_csv_file.write(c)
+      	       else:
+                  fout_csv_file.write(c + ',')
+		  if (is_GPS_File and not is_GPS_NRTSIM_File and i == gps_ht_msl_index+1):
+		     fout_csv_file.write('Amb Pr [mbar],')
+                  # } if (i == gps_ht_msl_index+1)..		     
+      	       # } if (i == len(data_row))..
+	    # } for c in data_row..   
+            fout_csv_file.write('\n')
+	 # } if (not findFirstGPSTOWChange)..
+	 
+      elif (headers_found):
+         data_row_cnt = data_row_cnt + 1
+	 
+         if (findFirstGPSTOWChange):
+	    tow_prev = tow_current
+	    tow_current = float(data_row[27])
+	    if (tow_prev != 0 and tow_current != tow_prev):
+	       print(' ***** FIRST GPS TOW CHANGE AT: ' + str(data_row_cnt) + ', tow_current = ' + str(tow_current))
+	       return data_row_cnt, tow_current 
+	    # } if (tow_current != tow_prev)..
+	 elif (gps_tow_calc):
+	    if (data_row_cnt < 20):
+	       print(' ***** sending tow_first_changed = ' + str(tow_first_changed) + ' to print_row')
+	    print_row(data_row_cnt, data_row, fout_csv_file, True, data_row_cnt_tow_change, tow_first_changed)   
+         # elif ((not gps_week_constant or (gps_week_constant and data_row_cnt % 10 == 1)) and len(data_row) > 0 and int(data_row[1]) != 0): # GPS Week != 0
+	 # elif ((not decimate or (decimate and data_row_cnt % 10 == 1)) and len(data_row) > 0 and int(data_row[0]) != 0): # GPS Week != 0
+	 elif ((not decimate or (decimate and data_row_cnt % 100 == 1)) and len(data_row) > 0 and int(data_row[gps_week_index]) != 0): # GPS Week != 0
+	 # elif (len(data_row) > 0 and int(data_row[1]) != 0): # GPS Week != 0
+	    if (data_row_cnt < 20):
+	       print(' ***** WILL CALL print_row, data_row_cnt = ' + str(data_row_cnt) + ', data_row[0] = ' + data_row[0])
+   	    # prev_gps_week, change_cnt = print_row(data_row_cnt, data_row, fout_csv_file, False, 0, 0, prev_gps_week, change_cnt, prev_file_gps_week, prev_file_last_tow)
+	    prev_gps_week, change_cnt = print_row(data_row_cnt, data_row, fout_csv_file, False, 0, 0, prev_gps_week, change_cnt, prev_file_gps_week, prev_file_last_tow, gps_week_constant, is_GPS_NRTSIM_File)
+         # } if (findFirstGPSTOWChange..
+
+      # this row is neither column headers nor data elements
+      else:
+         # test for DATA_START row (column headers to follow)
+         if (len(data_row) > 0 and data_row[0].strip() == 'DATA_START'):
+            determine_headers = True
+      # } if (determine_headers)..
+
+   # } for data_row in csvreader..
+   # print('****** process_csv_file: file_cnt: ' + str(file_cnt) + ', len(data_row) = ' + str(len(data_row)) + ', data_row[1] = ' + data_row[1])
+   print('****** process_csv_file: file_cnt: ' + str(file_cnt) + ', data_row_cnt: ' + str(data_row_cnt) + ', len(data_row) = ' + str(len(data_row)) )
+   
+   # prev_file_gps_week = int(data_row[1])-change_cnt
+   # prev_file_last_tow = float(data_row[2]) + 604800 * change_cnt
+
+   # prev_file_gps_week = int(data_row[0])-change_cnt
+   # prev_file_last_tow = float(data_row[1]) + 604800 * change_cnt
+   
+   prev_file_gps_week = int(data_row[gps_week_index])-change_cnt
+   prev_file_last_tow = float(data_row[gps_tow_index]) + 604800 * change_cnt
+   
+   print(' ***** AT END OF process_csv_file: file_cnt: ' + str(file_cnt) + ', prev_file_gps_week: ' + str(prev_file_gps_week) + ', prev_file_last_tow = ' + str(prev_file_last_tow) + ', change_cnt = ' + str(change_cnt))
+   
+   return prev_file_gps_week, prev_file_last_tow, change_cnt
+   
+in_file_name_array = []
+# in_file_name_array.append('C:/MP/Lord/Python_Sandbox/Vehicle_Logs/Canadian_Space_Agency/EKF_NRTSIM_out.csv')
+# in_file_name_array.append('C:/MP/Lord/Python_Sandbox/Vehicle_Logs/Canadian_Space_Agency/GPS_NRTSIM_out.csv')
+# in_file_name_array.append('C:/MP/Lord/Python_Sandbox/Vehicle_Logs/Canadian_Space_Agency/GPS_Heading_NRTSIM_out.csv')
+# in_file_name_array.append('C:/MP/Lord/Python_Sandbox/Vehicle_Logs/Canadian_Space_Agency/IMU_NRTSIM_out.csv')
+# in_file_name_array.append('C:/MP/Lord/Python_Sandbox/Vehicle_Logs/Canadian_Space_Agency/GPS_Array_NRTSIM_out.csv')
+
+# in_file_name_array.append('C:/MP/Lord/Python_Sandbox/Vehicle_Logs/Canadian_Space_Agency/IMU_Log_V3_4_2018-08-25T22h00m24s_LORD_FORMAT_EKF_Log.csv')
+# in_file_name_array.append('C:/MP/Lord/Python_Sandbox/Vehicle_Logs/Canadian_Space_Agency/IMU_Log_V3_4_2018-08-25T22h00m24s_LORD_FORMAT_GPS_Log.csv')
+# in_file_name_array.append('C:/MP/Lord/Python_Sandbox/Vehicle_Logs/Canadian_Space_Agency/IMU_Log_V3_4_2018-08-25T22h00m24s_LORD_FORMAT_IMU_Log.csv')
+
+in_file_name_array.append('C:/MP/Lord/Python_Sandbox/Vehicle_Logs/2019_04_02/inertial_raw_IMU_Log.csv')
+
+# Option to create an interpolated TOW column in the csv file (if such column is missing)
+gps_tow_calc = False
+# gps_tow_calc = True
+
+(fin_filepath, fin_filename) = os.path.split(in_file_name_array[0])
+
+gps_week_constant = False  # for NRTSIM input (will NOT decimate)
+# gps_week_constant = True     # for plotting (will also decimate)
+
+# decimate = False # for NRTSIM input (will NOT decimate)
+decimate = True  # for plotting (will also decimate)
+
+is_GPS_NRTSIM_File = False
+# is_GPS_NRTSIM_File = True
+
+is_GPS_File = False
+# is_GPS_File = True
+
+gps_ht_msl_index = 6
+
+if (gps_tow_calc):
+   fout_csv_file = open(os.path.join(fin_filepath, fin_filename[:-4] + "_TOW_Recalc.csv"), "w")
+elif (gps_week_constant):
+   fout_csv_file = open(os.path.join(fin_filepath, fin_filename[:-4] + "_Decimated_Week_Const_for_Plotting_Part1.csv"), "w")
+else:   
+   fout_csv_file = open(os.path.join(fin_filepath, fin_filename[:-4] + "_Orig_Data_for_NRTSIM_Part1.csv"), "w")
+# elif (decimate):
+   # fout_csv_file = open(os.path.join(fin_filepath, fin_filename[:-4] + "_10Hz.csv"), "w")   
+# } if (gps_tow_calc)..
+
+prev_file_gps_week = 0
+prev_file_last_tow = 0
+
+fout_csv_file.write('DATA_START\n')
+
+file_cnt = 1
+change_cnt = 0
+
+for in_file_name in in_file_name_array:
+   in_csvfile = open(in_file_name,'r')
+   csvreader = csv.reader(in_csvfile, delimiter=',')
+
+   # (fin_filepath, fin_filename) = os.path.split(in_file_name)
+
+   if (gps_tow_calc):
+      data_row_cnt_tow_change, tow_first_changed = process_csv_file(csvreader, gps_tow_calc, True)
+      in_csvfile.seek(0)
+      print(' ****** sending tow_first_changed = ' + str(tow_first_changed) + ' to second call to process_csv_file') 
+      prev_file_gps_week, prev_file_last_tow, change_cnt = process_csv_file(csvreader, gps_tow_calc, False, data_row_cnt_tow_change, tow_first_changed, file_cnt, prev_file_gps_week, prev_file_last_tow, change_cnt, gps_week_constant, decimate, is_GPS_NRTSIM_File)
+   else:
+      prev_file_gps_week, prev_file_last_tow, change_cnt = process_csv_file(csvreader, False, False, 0, 0, file_cnt, prev_file_gps_week, prev_file_last_tow, change_cnt, gps_week_constant, decimate, is_GPS_NRTSIM_File)
+   # } if (gps_tow_calc)..
+
+   file_cnt = file_cnt + 1
+   
+fout_csv_file.close()
+
+
+
+
